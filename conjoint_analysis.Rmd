@@ -1,0 +1,216 @@
+---
+title: "Conjoint Analysis"
+author: "Yi Huang"
+date: "1/15/2022"
+output: html_document
+---
+```{r}
+library('scales')
+library(readxl)
+library(ggplot2)
+```
+
+```{r}
+###### prepare the input ######
+design_data <- read_excel("~/Desktop/UC Davis/BAX442-Advanced Statistics/Class2/Conjoint/Design Matrix.xlsx", sheet = 2, range = cell_cols('A:E'))
+design_matrix <- as.matrix(design_data)
+
+preference_data <- read_excel("~/Desktop/UC Davis/BAX442-Advanced Statistics/Class2/Conjoint/Design Matrix.xlsx", sheet = 1, range = cell_cols('H:L'))
+preference <- as.matrix(preference_data)
+
+compete_A <- c(1, 1, 0, 1, 1, 2500)
+# colnames(compete_A) <- c('Intercept', 'Screen 75 inch', 'Screen 85 inch', 'Resolution', 'Sony=1', 'Price')
+compete_B <- c(1, 0, 1, 1, 0, 2000)
+
+own_brand <- c(1, 1, 0, 1, 0, 1900)
+
+cost <- c(1000, 500, 1000, 250, 250)
+preference
+```
+
+```{r}
+conjoint_analysis = function(design_matrix, preference, own_brand, compete_A, compete_B, cost) {
+
+net_cost <- cost %*% own_brand[1:5]  
+
+screen_75 <- factor(design_matrix[,1])
+screen_85 <- factor(design_matrix[,2])
+resolution <- factor(design_matrix[,3])
+sony <- factor(design_matrix[,4])
+price <- factor(design_matrix[,5])
+
+## calculate partworth, se, tval
+partworth <- c()
+se <- c()
+tval <- c()
+
+for(person in 1:ncol(preference)) {
+  model <- lm(preference[, person] ~ screen_75+screen_85+resolution+sony+price)
+  partworth <- append(partworth, model$coefficients)
+  se <- append(se, summary(model)$coefficients[,2])
+  tval <- append(tval, summary(model)$coefficients[,3])
+}
+  
+partworth <- matrix(partworth, nrow = ncol(preference), byrow = TRUE)
+se <- matrix(se, nrow = ncol(preference), byrow = TRUE)
+tval <- matrix(tval, nrow = ncol(preference), byrow = TRUE)
+
+
+## calculate attribute importance
+partworth_d <- data.frame(partworth)
+attribute <- data.frame(abs(partworth_d[,2]-partworth_d[,3]), abs(partworth_d[,4]), abs(partworth_d[,5]), abs(partworth_d[,6]))
+attribute_importance <- round(attribute/rowSums(attribute), digits = 2)
+colnames(attribute_importance) <- c('Screen Size', 'Screen Resolution', 'Brand Name', 'Price')
+# attribute_importance
+attribute_importance <- as.matrix(attribute_importance)
+
+## calculate willingness to pay
+price_savings <- 2500-2000
+price_partworth <- data.frame(matrix(abs(partworth[,6]), nrow = ncol(preference), byrow = TRUE))
+price_partworth <- as.matrix(price_savings/price_partworth)
+
+attribute_wo_price <- as.matrix(attribute)[,1:3]
+wtp <- c()
+for (person in 1:ncol(preference)) {
+  c <- price_partworth[person,] %*% attribute_wo_price[person, ]
+  wtp <- append(wtp, c)
+}
+wtp <- matrix(wtp, nrow=ncol(preference), byrow = TRUE)
+
+
+## calculate market share 
+mkt_profit = function(input_price) {
+
+utility_own <- c()
+utilityA <- c()
+utilityB <- c()
+
+
+for (person in 1:ncol(preference)) {
+  own_brand <- matrix(own_brand, nrow = 6, byrow=TRUE)
+  c <- partworth[person,1:5] %*% own_brand[1:5,] + partworth[person,6] %*% (input_price-2000)/(2500-2000)
+  utility_own <- append(utility_own, c)
+  compete_A <- matrix(compete_A, nrow = 6, byrow=TRUE)
+  c <- partworth[person,1:5] %*% compete_A[1:5,] + partworth[person,6] %*% (compete_A[6,]-2000)/(2500-2000)
+  utilityA <- append(utilityA, c)
+  compete_B <- matrix(compete_B , nrow = 6, byrow=TRUE)
+  c <- partworth[person,1:5] %*% compete_B[1:5,] + partworth[person,6] %*% (compete_B[6,]-2000)/(2500-2000)
+  utilityB <- append(utilityB, c)
+}
+
+
+attractiveness <- c(exp(utility_own), exp(utilityA) ,exp(utilityB))
+attractiveness <- matrix(attractiveness, nrow = 3, byrow = TRUE)
+
+attrac_sum <- matrix(colSums(attractiveness, na.rm = FALSE, dims=1))
+
+mkt_share <- c()
+for (person in 1:ncol(preference)) {
+  c <- attractiveness[,person] /attrac_sum[person, ]
+  mkt_share <- append(mkt_share, c)
+}
+mkt_share <- matrix(mkt_share, ncol = ncol(preference), byrow = FALSE)
+own_mkt_share <- mkt_share[1,]
+mkt_size <-100
+
+# calculate profit
+mkt_size <-100
+own_profit <- mkt_size*own_mkt_share*c(input_price-net_cost)
+
+return(list(own_mkt_share, own_profit))
+}
+
+
+price_range <- seq(1500, 2600, by=100)
+share_range<-c()
+profit_range<-c()
+
+for (price in 1:length(price_range)) {
+  s<- mkt_profit(price_range[price])[1]
+  share_range<-append(share_range, s)
+  p<- mkt_profit(price_range[price])[2]
+  profit_range<-append(profit_range, p)
+}
+
+
+all_share <- data.frame(t(data.frame(share_range)))
+row.names(all_share) <- c('1500', '1600', '1700', '1800', '1900', '2000', '2100', '2200', '2300', '2400', '2500', '2600')
+all_share
+
+
+all_profit <- data.frame(t(data.frame(profit_range)))
+row.names(all_profit) <- c('1500', '1600', '1700', '1800', '1900', '2000', '2100', '2200', '2300', '2400', '2500', '2600')
+all_profit
+
+## plot the market share and profit
+market_share_plot <- plot(NA, ylim = c(0, 1), xlim = c(1500, 2600), main='Market share by Price change (all persons)', xlab='price', ylab='market share')
+for (person in 1:ncol(preference)) {
+  lines(x=row.names(all_share), y=all_share[,person], col=seq(1,ncol(preference))[person])
+  legend(2400, 1, legend=c('person1', 'person2', 'person3', 'person4', 'person5'), col=seq(1,ncol(preference)), lty=1, cex=0.8)
+}
+
+profit_plot <- plot(NA, ylim = c(-50000, 20000), xlim = c(1500, 2600), main='Profit by Price change (all persons)', xlab='price', ylab='profit')
+for (person in 1:ncol(preference)) {
+  lines(x=row.names(all_profit), y=all_profit[,person], col=seq(1,ncol(preference))[person])
+  legend(2400, 1, legend=c('person1', 'person2', 'person3', 'person4', 'person5'), col=seq(1,ncol(preference)), lty=1, cex=0.8)
+}
+
+### find the maximum profit and optimal price
+all_profit_max =c()
+for (person in 1:ncol(preference)) {
+  c <- max(all_profit[,person])
+  all_profit_max <- append(all_profit_max, c)
+}
+
+all_profit_max <- as.matrix(all_profit_max)
+bind_price <- cbind(price_range, all_profit)
+
+optimal_price <- c()
+for (person in 1:ncol(preference)) {
+  c <- bind_price[[which(bind_price[,person+1] ==all_profit_max[person,]), 1]]
+  optimal_price <- append(optimal_price, c)
+}
+
+
+return(list(partworth, se, tval, attribute_importance, wtp, market_share_plot, profit_plot, all_profit_max, optimal_price))
+
+}
+
+
+```
+
+
+
+
+```{r}
+### apply the function and get answer
+result <- conjoint_analysis(design_matrix, preference, own_brand, compete_A, compete_B, cost)
+```
+
+```{r}
+## Saving the outputs to text file
+sink('Conjoint Analysis by R.txt', append = F, split=T)
+
+print('Partworth: '); result[1]
+
+print('se: '); result[2]
+
+print('tval: '); result[3]
+
+print('Attribute Importance: '); result[4]
+
+print('Willingness to pay for each feature: '); result[5]
+
+print('Maximum profit: '); result[8]
+
+print('Optimal Price: '); result[9]
+                               
+sink()
+
+
+
+```
+
+
+
+
